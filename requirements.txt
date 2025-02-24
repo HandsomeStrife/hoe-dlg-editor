@@ -1,0 +1,6 @@
+pytest>=7.0.0
+black>=22.0.0
+mypy>=1.0.0
+chardet>=4.0.0  # For character encoding detection
+prompt_toolkit>=3.0.0  # For interactive editor interface
+rich>=10.0.0  # For pretty printing and syntax highlighting 

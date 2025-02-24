@@ -2,16 +2,20 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, font
 from tkinter.scrolledtext import ScrolledText
 import re
+import os
 from typing import Optional, List, Dict
 from pathlib import Path
 from dlg_handler import DlgHandler, TextSection
 from db_handler import DbHandler
+from ai_translator import AITranslator
+from api_key_dialog import APIKeyDialog
 
 class SectionEditor(ttk.Frame):
-    def __init__(self, parent, section: TextSection, index: int, **kwargs):
+    def __init__(self, parent, section: TextSection, index: int, translator: AITranslator = None, **kwargs):
         super().__init__(parent, **kwargs)
         self.section = section
         self.index = index
+        self.translator = translator
         
         # Calculate max available characters based on total available space
         self.max_chars = section.end - section.start  # This now includes trailing null bytes
@@ -23,11 +27,25 @@ class SectionEditor(ttk.Frame):
         header_frame = ttk.Frame(self)
         header_frame.pack(fill=tk.X, pady=(0, 5))
         
+        # Left side of header (section number and translate button)
+        header_left = ttk.Frame(header_frame)
+        header_left.pack(side=tk.LEFT)
+        
         ttk.Label(
-            header_frame,
+            header_left,
             text=f"Section {index + 1}",
             font=('TkDefaultFont', 10, 'bold')
-        ).pack(side=tk.LEFT)
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        
+        # Add translate button if translator is available
+        if translator and translator.has_valid_key():
+            self.translate_btn = ttk.Button(
+                header_left,
+                text="Translate",
+                command=self._translate_section,
+                width=10
+            )
+            self.translate_btn.pack(side=tk.LEFT)
         
         # Show both current and maximum available length
         current_len = len(section.text.encode(section.encoding))
@@ -52,6 +70,44 @@ class SectionEditor(ttk.Frame):
         
         # Add validation
         self.editor.bind('<KeyRelease>', self._validate_length)
+        
+    def _translate_section(self):
+        """Translate the current section using OpenAI."""
+        if not self.translator:
+            return
+            
+        try:
+            current_text = self.editor.get('1.0', 'end-1c')
+            
+            # Get all text sections from parent window for context
+            context = []
+            parent_frame = self.winfo_parent()
+            if parent_frame:
+                parent = self.nametowidget(parent_frame)
+                for widget in parent.winfo_children():
+                    if isinstance(widget, SectionEditor):
+                        section_text = widget.get_text()
+                        context.append(section_text)
+            
+            translation = self.translator.translate_text(
+                current_text,
+                self.max_chars,
+                self.section.encoding,
+                context=context
+            )
+            
+            # Replace current text with translation
+            self.editor.delete('1.0', 'end')
+            self.editor.insert('1.0', translation)
+            
+            # Validate length after translation
+            self._validate_length()
+            
+        except Exception as e:
+            messagebox.showerror(
+                "Translation Error",
+                str(e)
+            )
         
     def _validate_length(self, event=None):
         """Validate text length and update visual feedback"""
@@ -169,6 +225,7 @@ class FileList(ttk.Frame):
 class DlgGuiEditor:
     def __init__(self, db_path: str = "dlg_files.db"):
         self.db = DbHandler(db_path)
+        self.translator = AITranslator()
         
         # Create main window
         self.root = tk.Tk()
@@ -198,6 +255,11 @@ class DlgGuiEditor:
         file_menu.add_command(label="Rescan Files", command=self.rescan_files)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.root.quit, accelerator="Ctrl+Q")
+        
+        # Settings menu
+        settings_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Settings", menu=settings_menu)
+        settings_menu.add_command(label="Configure OpenAI API Key", command=self._show_api_key_dialog)
         
     def _create_layout(self):
         """Create the main layout."""
@@ -266,6 +328,13 @@ class DlgGuiEditor:
         self.canvas.bind('<Enter>', self._bound_to_mousewheel)
         self.canvas.bind('<Leave>', self._unbound_to_mousewheel)
         
+    def _show_api_key_dialog(self):
+        """Show dialog for configuring OpenAI API key."""
+        APIKeyDialog(self.root, self.translator)
+        # Refresh editors to show/hide translate buttons
+        if self.current_file:
+            self.load_file(self.current_file)
+        
     def load_file(self, file_path: str):
         """Load a file for editing."""
         try:
@@ -284,6 +353,7 @@ class DlgGuiEditor:
                     self.scrollable_frame,
                     section,
                     i,
+                    translator=self.translator,  # Pass translator to each section
                     padding=(5, 5, 5, 15)
                 )
                 editor.pack(fill=tk.X, padx=5, pady=5)

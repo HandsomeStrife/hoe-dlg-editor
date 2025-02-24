@@ -123,7 +123,11 @@ class DlgHandler:
             with open(self.filepath, 'rb') as f:
                 self._original_binary = f.read()
                 
+            # Store a truly unmodified copy of the binary for perfect preservation
+            self._truly_original_binary = self._original_binary
+                
             # Check for problematic bytes
+            self._problematic_byte_positions = []  # Track the positions explicitly
             self._check_for_problematic_bytes()
                 
             # Always use cp1251 for these files
@@ -200,6 +204,7 @@ class DlgHandler:
             except UnicodeDecodeError as e:
                 if "charmap" in str(e):
                     problematic_bytes.append((i, byte))
+                    self._problematic_byte_positions.append(i)  # Track these positions
         
         # Check for control code patterns
         marked_as_control = set()
@@ -713,94 +718,245 @@ class DlgHandler:
         if len(new_sections) != len(self.text_sections):
             raise ValueError(f"Number of text sections changed. Expected {len(self.text_sections)}, got {len(new_sections)}")
         
-        # Create exact copy of original binary
-        new_binary = bytearray(self._original_binary)
-        
-        # Process sections
+        # Check if no changes were made at all
+        no_changes = True
         for i, (section, new_section_text) in enumerate(zip(self.text_sections, new_sections)):
+            if new_section_text != section.text:
+                no_changes = False
+                break
+        
+        # If no changes at all, just copy the truly original file exactly
+        if no_changes:
+            output_path = output_path or self.filepath
             try:
-                # If the text hasn't changed, skip this section
-                if new_section_text == section.text:
-                    continue
-                
-                # Encode the new text using the section's encoding
-                new_text_bytes = new_section_text.encode(section.encoding)
-                
-                # Calculate the maximum number of bytes we can replace
-                # This is based on the original visible text positions
-                if hasattr(section, 'text_byte_positions') and section.text_byte_positions:
-                    original_text_positions = section.text_byte_positions
-                    
-                    # Check if new text fits in the available positions
-                    if len(new_text_bytes) > len(original_text_positions):
-                        print(f"Warning: New text in section {i+1} is too long ({len(new_text_bytes)} bytes) " +
-                              f"to fit in original text positions ({len(original_text_positions)} bytes). Truncating.")
-                        new_text_bytes = new_text_bytes[:len(original_text_positions)]
-                    
-                    # Replace bytes at exact positions from the original text
-                    for j, byte_pos in enumerate(original_text_positions):
-                        if j < len(new_text_bytes):
-                            # Replace with new text byte
-                            new_binary[byte_pos] = new_text_bytes[j]
-                        else:
-                            # If new text is shorter, fill with null bytes
-                            new_binary[byte_pos] = 0
+                # Use the truly original binary that hasn't been sanitized
+                if hasattr(self, '_truly_original_binary'):
+                    with open(output_path, 'wb') as dst:
+                        dst.write(self._truly_original_binary)
+                    print(f"No changes detected - Original file copied exactly to {output_path} (using preserved binary)")
                 else:
-                    # Fallback for sections without recorded byte positions
-                    print(f"Warning: Section {i+1} doesn't have recorded byte positions. Using standard replacement.")
-                    
-                    # Standard replacement logic as before
-                    available_space = section.end - section.start
-                    
-                    # Check for trailing control characters
-                    has_trailing_control = hasattr(section, 'trailing_control') and section.trailing_control
-                    
-                    if has_trailing_control:
-                        trailing_bytes = section.trailing_control.encode(section.encoding)
-                        trailing_length = len(trailing_bytes)
-                        
-                        # Available space for text = total space - trailing control
-                        available_for_text = available_space - trailing_length
-                        
-                        if len(new_text_bytes) > available_for_text:
-                            print(f"Warning: New text is too long. Truncating.")
-                            new_text_bytes = new_text_bytes[:available_for_text]
-                        
-                        # Construct the new section: text + padding + trailing control
-                        padding_length = available_for_text - len(new_text_bytes)
-                        complete_bytes = new_text_bytes + b'\x00' * padding_length + trailing_bytes
-                    else:
-                        # No trailing control, use full space
-                        if len(new_text_bytes) > available_space:
-                            print(f"Warning: New text is too long. Truncating.")
-                            new_text_bytes = new_text_bytes[:available_space]
-                        
-                        # Construct the new section: text + padding
-                        padding_length = available_space - len(new_text_bytes)
-                        complete_bytes = new_text_bytes + b'\x00' * padding_length
-                    
-                    # Replace the entire section
-                    new_binary[section.start:section.end] = complete_bytes
-            
+                    # Fallback to standard file copy
+                    with open(self.filepath, 'rb') as src, open(output_path, 'wb') as dst:
+                        dst.write(src.read())
+                    print(f"No changes detected - Original file copied exactly to {output_path}")
+                return
             except Exception as e:
-                print(f"Warning: Error updating section {i+1}: {e}. Skipping this section.")
+                print(f"Error copying original file: {e}")
+                raise
+                
+        # FIXED APPROACH: Never modify the problematic bytes
+        # 1. Begin with an exact copy of the original file
+        # 2. Extract the list of special byte positions that must remain untouched
+        # 3. Only modify positions that are safe to change
+        
+        # Begin with an exact copy of the original file
+        with open(self.filepath, 'rb') as f:
+            result_binary = bytearray(f.read())
+            
+        print("Using direct file copy as the base - preserving ALL special bytes")
+        
+        # Get the list of problematic bytes that must remain untouched
+        protected_positions = getattr(self, '_problematic_byte_positions', [])
+        
+        if protected_positions:
+            print(f"Protecting {len(protected_positions)} special byte positions: {protected_positions}")
+        
+        # For debugging
+        changes_made = []
+        
+        # Process each section
+        for i, (section, new_section_text) in enumerate(zip(self.text_sections, new_sections)):
+            # Skip if no changes in this section
+            if new_section_text == section.text:
                 continue
+                
+            print(f"\nProcessing section {i+1}: '{section.text}' -> '{new_section_text}'")
+            
+            # Get the original text and encoded versions
+            original_text = section.text
+            original_encoded = original_text.encode(section.encoding)
+            new_encoded = new_section_text.encode(section.encoding)
+            
+            # Do byte-by-byte differential changes only
+            # 1. Find the original text exactly in the binary data
+            # 2. Modify only the minimum necessary bytes
+            
+            # Get section from the file binary
+            section_data = result_binary[section.start:section.end]
+                
+            print(f"  Section boundaries: {section.start}-{section.end} ({len(section_data)} bytes)")
+            print(f"  Original text length: {len(original_text)} chars, {len(original_encoded)} bytes")
+            print(f"  New text length: {len(new_section_text)} chars, {len(new_encoded)} bytes")
+            
+            # See if any problematic bytes are in this section
+            section_protected_positions = [pos for pos in protected_positions 
+                                        if section.start <= pos < section.end]
+            
+            if section_protected_positions:
+                print(f"  This section contains {len(section_protected_positions)} protected bytes at: {section_protected_positions}")
+            
+            # Search for the exact original text in the section
+            original_found = False
+            
+            # 1. First try to use recorded byte positions
+            if hasattr(section, 'text_byte_positions') and section.text_byte_positions:
+                text_positions = [pos for pos in section.text_byte_positions 
+                                if pos >= section.start and pos < section.end]
+                
+                if text_positions:
+                    print(f"  Found {len(text_positions)} recorded text byte positions")
+                    original_found = True
+                    
+                    # Create a byte map to show which positions contain visible text
+                    # and are safe to modify (not protected)
+                    text_position_map = [False] * (section.end - section.start)
+                    for pos in text_positions:
+                        rel_pos = pos - section.start
+                        if 0 <= rel_pos < len(text_position_map) and pos not in protected_positions:
+                            text_position_map[rel_pos] = True
+                    
+                    # Replace only the bytes at text positions that are not protected
+                    replaced_count = 0
+                    protected_count = 0
+                    for rel_pos, is_text in enumerate(text_position_map):
+                        abs_pos = section.start + rel_pos
+                        
+                        # Skip protected positions
+                        if abs_pos in protected_positions:
+                            protected_count += 1
+                            continue
+                            
+                        if is_text:
+                            if replaced_count < len(new_encoded):
+                                # Replace with new text byte
+                                old_byte = result_binary[abs_pos]
+                                new_byte = new_encoded[replaced_count]
+                                result_binary[abs_pos] = new_byte
+                                
+                                if old_byte != new_byte:
+                                    changes_made.append((abs_pos, old_byte, new_byte))
+                                    
+                                replaced_count += 1
+                            else:
+                                # Fill with null bytes if we run out of new text
+                                old_byte = result_binary[abs_pos]
+                                result_binary[abs_pos] = 0
+                                
+                                if old_byte != 0:
+                                    changes_made.append((abs_pos, old_byte, 0))
+                    
+                    print(f"  Replaced {replaced_count} bytes of visible text")
+                    print(f"  Preserved {protected_count} protected byte positions")
+                    if replaced_count < len(new_encoded):
+                        print(f"  WARNING: Only replaced {replaced_count} bytes out of {len(new_encoded)} in new text")
+                    if replaced_count > len(new_encoded):
+                        print(f"  Filled {replaced_count - len(new_encoded)} remaining positions with NULL bytes")
+            
+            # 2. If recorded positions not available, search for the text directly
+            if not original_found:
+                # Search for original text within section data
+                if len(original_encoded) > 0:
+                    # Try to find the full text
+                    search_text = original_encoded
+                    
+                    for offset in range(len(section_data) - len(search_text) + 1):
+                        if section_data[offset:offset+len(search_text)] == search_text:
+                            print(f"  Found exact text at offset {offset} within section")
+                            original_found = True
+                            
+                            # Replace the text at this position (careful with lengths)
+                            pos = section.start + offset
+                            replacement_length = min(len(search_text), len(new_encoded))
+                            
+                            # Replace bytes one by one, skipping protected positions
+                            replaced_count = 0
+                            protected_count = 0
+                            
+                            for j in range(replacement_length):
+                                current_pos = pos + j
+                                
+                                # Skip protected positions
+                                if current_pos in protected_positions:
+                                    protected_count += 1
+                                    continue
+                                
+                                old_byte = result_binary[current_pos]
+                                new_byte = new_encoded[replaced_count]
+                                result_binary[current_pos] = new_byte
+                                
+                                if old_byte != new_byte:
+                                    changes_made.append((current_pos, old_byte, new_byte))
+                                
+                                replaced_count += 1
+                                if replaced_count >= len(new_encoded):
+                                    break
+                            
+                            # If new text is shorter, fill with null bytes
+                            remaining_positions = 0
+                            if len(new_encoded) < len(search_text):
+                                for j in range(replaced_count + protected_count, len(search_text)):
+                                    current_pos = pos + j
+                                    
+                                    # Skip protected positions
+                                    if current_pos in protected_positions:
+                                        continue
+                                    
+                                    old_byte = result_binary[current_pos]
+                                    result_binary[current_pos] = 0
+                                    if old_byte != 0:
+                                        changes_made.append((current_pos, old_byte, 0))
+                                    remaining_positions += 1
+                                        
+                            print(f"  Replaced {replaced_count} bytes of text")
+                            print(f"  Preserved {protected_count} protected byte positions")
+                            if remaining_positions > 0:
+                                print(f"  Filled {remaining_positions} remaining positions with NULL bytes")
+                            if replaced_count < len(new_encoded):
+                                print(f"  WARNING: New text is longer, only placed {replaced_count} out of {len(new_encoded)} bytes")
+                                
+                            break
+            
+            # Skip the word-by-word search for simplicity - it's better to leave sections untouched
+            # if we can't find the exact text positions
+            
+            # If we still can't find the text, show a warning
+            if not original_found:
+                print("  WARNING: Could not locate original text in binary data!")
+                print("  This section will not be modified to avoid corrupting the file.")
+                print("  Try with a different version of the file or manually check the binary structure.")
+        
+        # Log all changes
+        if changes_made:
+            print("\nSummary of changes made:")
+            for pos, old, new in changes_made[:10]:  # Show first 10 changes
+                try:
+                    old_char = bytes([old]).decode(section.encoding, errors='replace')
+                    new_char = bytes([new]).decode(section.encoding, errors='replace') if new != 0 else "␀"
+                except:
+                    old_char = "?"
+                    new_char = "?"
+                print(f"  Position {pos}: {old} ('{old_char}') -> {new} ('{new_char}')")
+            
+            if len(changes_made) > 10:
+                print(f"  ... and {len(changes_made) - 10} more changes")
         
         # Save to file
         output_path = output_path or self.filepath
         try:
             with open(output_path, 'wb') as f:
-                f.write(new_binary)
+                f.write(result_binary)
             
-            print(f"File saved successfully to {output_path}")
+            print(f"\nFile saved successfully to {output_path}")
             
             # Compare files if we saved to a different path
             if output_path != self.filepath:
                 differences = self.compare_files(output_path)
                 if differences:
                     print("\nWarning: Differences found between original and new file:")
-                    for diff in differences:
+                    for diff in differences[:10]:  # Show only first 10 differences
                         print(diff)
+                    if len(differences) > 10:
+                        print(f"... and {len(differences) - 10} more differences")
                     print()
         except Exception as e:
             print(f"Error saving file: {e}")

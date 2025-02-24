@@ -137,11 +137,23 @@ class DlgHandler:
         content = ''.join(content_parts)
         
         # Find text sections using a pattern that matches valid text sequences
-        text_pattern = r'(?:[А-Яа-яЁё][А-Яа-яЁё\s,.!?-]{1,}[А-Яа-яЁё]|[A-Za-z][A-Za-z\s,.!?-]{1,}[A-Za-z]|[А-Яа-яЁёA-Za-z][А-Яа-яЁёA-Za-z\s,.!?-]{1,}[А-Яа-яЁёA-Za-z])'
+        # Updated pattern to handle contractions and apostrophes properly
+        text_pattern = r"""(?x)  # Enable verbose mode for better readability
+            (?:
+                # Match Cyrillic text with possible apostrophes and punctuation
+                [А-Яа-яЁё][А-Яа-яЁё\s,.!?'"-]*[А-Яа-яЁё]
+                |
+                # Match Latin text with possible apostrophes and punctuation
+                [A-Za-z][A-Za-z\s,.!?'"-]*[A-Za-z]
+                |
+                # Match mixed Cyrillic/Latin with possible apostrophes and punctuation
+                [А-Яа-яЁёA-Za-z][А-Яа-яЁёA-Za-z\s,.!?'"-]*[А-Яа-яЁёA-Za-z]
+            )
+        """
         
         # Find all matches
         self.text_sections = []
-        for match in re.finditer(text_pattern, content):
+        for match in re.finditer(text_pattern, content, re.VERBOSE):
             text = match.group(0)
             
             # Skip if the text has too many special characters

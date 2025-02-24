@@ -53,11 +53,13 @@ class AITranslator:
 
             def validate_translation(trans: str) -> bool:
                 """Validate that the translation meets our requirements."""
-                allowed_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ,.!?-'\" ")
+                # Allow basic Latin characters, punctuation, and proper quote handling
+                allowed_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ,.!?-'\"() ")
                 if not all(c in allowed_chars for c in trans if c not in {'\n', '\r', '\t'}):
                     return False
                 
-                english_markers = {'the', 'a', 'an', 'in', 'on', 'at', 'to', 'of', 'for', 'with'}
+                # Check that it looks like English (at least some common English words)
+                english_markers = {'the', 'a', 'an', 'in', 'on', 'at', 'to', 'of', 'for', 'with', 'you', 'are', 'is', 'be'}
                 words = set(trans.lower().split())
                 if not any(marker in words for marker in english_markers):
                     return False
@@ -78,6 +80,15 @@ CRITICAL REQUIREMENTS:
 4. NO Cyrillic or special characters allowed
 5. Preserve core meaning and tone
 6. Be as concise as possible while maintaining clarity
+7. PRESERVE ALL QUOTATION MARKS exactly as they appear
+8. DO NOT split sentences at quotation marks
+9. Keep all punctuation in its original position
+
+Translation approach:
+1. First, identify any quoted text and preserve its structure
+2. Translate while maintaining all quotes and punctuation
+3. Keep sentences intact - don't break them up
+4. If shortening is needed, preserve quotes and sentence structure
 
 Translate to English:"""
 
@@ -108,13 +119,20 @@ Please provide a shorter version while maintaining the core meaning.
 Original Russian: {text}
 Previous translation: {previous}
 
-REQUIREMENTS:
+CRITICAL REQUIREMENTS:
 1. Must be SHORTER than the previous translation
 2. Keep essential meaning and tone
 3. Use simpler words and shorter phrases
-4. Remove any unnecessary details
-5. Maximum {max_bytes} bytes when encoded in {encoding}
-6. Use only basic Latin characters
+4. PRESERVE ALL QUOTATION MARKS and punctuation
+5. DO NOT split sentences at quotation marks
+6. Maximum {max_bytes} bytes when encoded in {encoding}
+7. Use only basic Latin characters
+
+Translation approach:
+1. Keep all quotes and punctuation intact
+2. Shorten by using more concise wording
+3. Maintain sentence and quote structure
+4. Only remove content if absolutely necessary
 
 Provide shorter translation:"""
 

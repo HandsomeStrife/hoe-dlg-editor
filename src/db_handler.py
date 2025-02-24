@@ -92,4 +92,23 @@ class DbHandler:
         return self
         
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close() 
+        self.close()
+        
+    def update_relative_path(self, file_path: str, new_relative_path: str) -> None:
+        """Update the relative path for a file."""
+        self.cursor.execute("""
+            UPDATE dlg_files 
+            SET relative_path = ?
+            WHERE file_path = ?
+        """, (new_relative_path, file_path))
+        self.conn.commit()
+        
+    def get_relative_path(self, file_path: str) -> str:
+        """Get the relative path for a file."""
+        self.cursor.execute("""
+            SELECT relative_path 
+            FROM dlg_files 
+            WHERE file_path = ?
+        """, (file_path,))
+        result = self.cursor.fetchone()
+        return result[0] if result else None 

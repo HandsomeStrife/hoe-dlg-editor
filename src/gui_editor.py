@@ -265,50 +265,39 @@ class FileList(ttk.Frame):
         super().__init__(parent, **kwargs)
         self.db = db
         self.on_select = on_select
+        self.open_states = {}
         
         # Create treeview
-        self.tree = ttk.Treeview(
-            self,
-            columns=('path',),
-            displaycolumns=(),
-            selectmode='browse'
-        )
-        self.tree.heading('#0', text='DLG Files')
+        self.tree = ttk.Treeview(self, selectmode='browse')
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
         # Add scrollbar
-        scrollbar = ttk.Scrollbar(
-            self,
-            orient="vertical",
-            command=self.tree.yview
-        )
+        scrollbar = ttk.Scrollbar(self, orient=tk.VERTICAL, command=self.tree.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.tree.configure(yscrollcommand=scrollbar.set)
         
-        # Pack widgets
-        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        # Configure tags for different file states
+        self.tree.tag_configure('translated', foreground='green')
+        self.tree.tag_configure('not_required', font=('TkDefaultFont', 9, 'overstrike'), foreground='gray')
         
-        # Bind selection
+        # Bind events
         self.tree.bind('<<TreeviewSelect>>', self._on_select)
-        
-        # Store open states
-        self.open_nodes = set()
         
         # Load files
         self.refresh_files()
         
     def _store_open_states(self):
         """Store which nodes are currently open."""
-        self.open_nodes = {
-            self.tree.item(item)["text"]
+        self.open_states = {
+            self.tree.item(item)["text"]: self.tree.item(item)["open"]
             for item in self.tree.get_children("")
-            if self.tree.item(item)["open"]
         }
         
     def _restore_open_states(self):
         """Restore previously open nodes."""
         for item in self.tree.get_children(""):
-            if self.tree.item(item)["text"] in self.open_nodes:
-                self.tree.item(item, open=True)
+            if item in self.open_states:
+                self.tree.item(item, open=self.open_states[item])
         
     def refresh_files(self, maintain_selection=False):
         """Refresh the file list from database."""
@@ -330,6 +319,11 @@ class FileList(ttk.Frame):
         
         for file_path, relative_path, is_translated in files:
             # Split path into parts
+            # Check if file is marked as not required
+            is_not_required = relative_path.startswith("NOT_REQUIRED:")
+            if is_not_required:
+                relative_path = relative_path.replace("NOT_REQUIRED:", "")
+                
             parts = Path(relative_path).parts
             
             # Create parent directories if needed
@@ -355,12 +349,13 @@ class FileList(ttk.Frame):
                 values=(file_path,)
             )
             
-            # Set color if translated
-            if is_translated:
-                self.tree.tag_configure('translated', foreground='green')
+            # Set style based on file status
+            if is_not_required:
+                self.tree.item(item_id, tags=('not_required',))
+            elif is_translated:
                 self.tree.item(item_id, tags=('translated',))
             
-            file_items.append((item_id, file_path, is_translated))
+            file_items.append((item_id, file_path, is_translated or is_not_required))
         
         # Restore open states
         self._restore_open_states()
@@ -450,6 +445,7 @@ class DlgGuiEditor:
         menubar.add_cascade(label="File", menu=file_menu)
         file_menu.add_command(label="Save", command=self.save_file, accelerator="Ctrl+S")
         file_menu.add_command(label="Mark as Translated", command=self.mark_translated, accelerator="Ctrl+T")
+        file_menu.add_command(label="Mark as Not Required", command=self.mark_not_required, accelerator="Ctrl+N")
         file_menu.add_separator()
         file_menu.add_command(label="Rescan Files", command=self.rescan_files)
         file_menu.add_separator()
@@ -540,6 +536,7 @@ class DlgGuiEditor:
         """Setup keyboard shortcuts."""
         self.root.bind("<Control-s>", lambda e: self.save_file())
         self.root.bind("<Control-t>", lambda e: self.mark_translated())
+        self.root.bind("<Control-n>", lambda e: self.mark_not_required())
         self.root.bind("<Control-q>", lambda e: self.root.quit())
         
         # Configure canvas scrolling
@@ -799,6 +796,45 @@ class DlgGuiEditor:
         else:
             self.status_var.set("No more untranslated files")
             messagebox.showinfo("Info", "No more untranslated files found")
+        
+    def mark_not_required(self):
+        """Mark current file as not required for translation."""
+        if not self.current_file:
+            return
+            
+        # Get the relative path from the database
+        relative_path = None
+        files = self.db.get_all_files()
+        for file_path, rel_path, _ in files:
+            if file_path == self.current_file:
+                relative_path = rel_path
+                break
+                
+        if not relative_path:
+            messagebox.showerror("Error", "Could not find file in database")
+            return
+            
+        # Update the relative path to mark as not required
+        if relative_path.startswith("NOT_REQUIRED:"):
+            # Remove the not required status
+            new_relative_path = relative_path.replace("NOT_REQUIRED:", "")
+            self.db.update_relative_path(self.current_file, new_relative_path)
+            status = "Marked as required for translation"
+        else:
+            # Add the not required status
+            new_relative_path = "NOT_REQUIRED:" + relative_path
+            self.db.update_relative_path(self.current_file, new_relative_path)
+            status = "Marked as not required for translation"
+            
+            # Find and load next untranslated file
+            next_file = self.file_list.get_next_untranslated(self.current_file)
+            if next_file:
+                self.load_file(next_file)
+                status += " - Loaded next untranslated file"
+            
+        # Refresh file list while maintaining tree state
+        self.file_list.refresh_files(maintain_selection=True)
+        self.status_var.set(status)
         
     def run(self):
         """Run the editor application."""

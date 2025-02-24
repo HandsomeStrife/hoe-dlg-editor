@@ -31,7 +31,8 @@ def generate_checklist(db_path: str, output_file: str = "checklist.md"):
     content = ["# DLG Files Translation Checklist\n"]
     content.append("Status of all dialog files in the game.\n")
     content.append("- [ ] Unchecked/Not translated")
-    content.append("- [x] Checked/Translated\n")
+    content.append("- [x] Checked/Translated")
+    content.append("- ~~[ ]~~ Not required (empty files)\n")
     
     # Sort directories
     for dir_path in sorted(directories.keys()):
@@ -45,7 +46,14 @@ def generate_checklist(db_path: str, output_file: str = "checklist.md"):
         # Add files in directory
         for file_info in sorted(directories[dir_path], key=lambda x: x['name']):
             check = 'x' if file_info['translated'] else ' '
-            content.append(f"- [{check}] `{file_info['path']}`")
+            path = file_info['path']
+            
+            # Check if file is marked as not required
+            if path.startswith("NOT_REQUIRED:"):
+                path = path.replace("NOT_REQUIRED:", "")
+                content.append(f"- ~~[ ]~~ `{path}`")
+            else:
+                content.append(f"- [{check}] `{path}`")
         content.append("")
     
     # Add statistics

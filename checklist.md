@@ -4,6 +4,7 @@ Status of all dialog files in the game.
 
 - [ ] Unchecked/Not translated
 - [x] Checked/Translated
+- ~~[ ]~~ Not required (empty files)
 
 ### Data\ChrPreset\Pers\BC_CM_Glashatay
 
@@ -26,11 +27,10 @@ Status of all dialog files in the game.
 ### Data\ChrPreset\Pers\BC_IM_Commandant
 
 - [x] `Data\ChrPreset\Pers\BC_IM_Commandant\BC_IM_Commandant_d.dlg`
-- [ ] `Data\ChrPreset\Pers\BC_IM_Commandant\BC_IM_Commandant_d9.dlg`
 
 ### Data\ChrPreset\Pers\BC_IM_TGuard
 
-- [ ] `Data\ChrPreset\Pers\BC_IM_TGuard\BC_IM_TGuard_d.dlg`
+- [x] `Data\ChrPreset\Pers\BC_IM_TGuard\BC_IM_TGuard_d.dlg`
 - [ ] `Data\ChrPreset\Pers\BC_IM_TGuard\BC_IM_TGuard_d1.dlg`
 - [ ] `Data\ChrPreset\Pers\BC_IM_TGuard\BC_IM_TGuard_d2.dlg`
 - [ ] `Data\ChrPreset\Pers\BC_IM_TGuard\BC_IM_TGuard_d3.dlg`
@@ -1073,7 +1073,11 @@ Status of all dialog files in the game.
 - [ ] `Data\ChrPreset\Secondary\VillageNear\werewolf_head\VN_OLD_Koldun\VN_OLD_Koldun_D2.dlg`
 - [ ] `Data\ChrPreset\Secondary\VillageNear\werewolf_head\VN_OLD_Koldun\VN_OLD_Koldun_D9.dlg`
 
+### NOT_REQUIRED:Data\ChrPreset\Pers\BC_IM_Commandant
+
+- ~~[ ]~~ `Data/ChrPreset/Pers/BC_IM_Commandant/BC_IM_Commandant_d9.dlg`
+
 ## Statistics
 - Total files: 600
-- Translated: 8
-- Progress: 1.3%
+- Translated: 9
+- Progress: 1.5%

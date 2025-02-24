@@ -13,8 +13,8 @@ class SectionEditor(ttk.Frame):
         self.section = section
         self.index = index
         
-        # Calculate max visible characters (approximate)
-        self.max_chars = len(section.text)
+        # Calculate max available characters based on total available space
+        self.max_chars = section.end - section.start  # This now includes trailing null bytes
         
         # Create frame with border
         self.configure(relief='solid', borderwidth=1, padding=5)
@@ -29,9 +29,11 @@ class SectionEditor(ttk.Frame):
             font=('TkDefaultFont', 10, 'bold')
         ).pack(side=tk.LEFT)
         
+        # Show both current and maximum available length
+        current_len = len(section.text.encode(section.encoding))
         ttk.Label(
             header_frame,
-            text=f"(Max length: {self.max_chars} characters)",
+            text=f"(Current: {current_len} bytes, Max available: {self.max_chars} bytes)",
             font=('TkDefaultFont', 9),
             foreground='gray'
         ).pack(side=tk.RIGHT)
@@ -56,10 +58,26 @@ class SectionEditor(ttk.Frame):
         current_text = self.editor.get('1.0', 'end-1c')
         current_len = len(current_text.encode(self.section.encoding))
         
-        if current_len > (self.section.end - self.section.start):
+        if current_len > self.max_chars:
             self.editor.configure(background='#ffe6e6')  # Light red
+            # Update parent window's header to show overflow
+            header_frame = self.winfo_children()[0]  # Get header frame
+            for child in header_frame.winfo_children():
+                if isinstance(child, ttk.Label) and child.cget('foreground') == 'gray':
+                    child.configure(
+                        text=f"(Current: {current_len} bytes, Max available: {self.max_chars} bytes) - OVERFLOW",
+                        foreground='red'
+                    )
         else:
             self.editor.configure(background='white')
+            # Update parent window's header to show normal state
+            header_frame = self.winfo_children()[0]  # Get header frame
+            for child in header_frame.winfo_children():
+                if isinstance(child, ttk.Label) and (child.cget('foreground') == 'gray' or child.cget('foreground') == 'red'):
+                    child.configure(
+                        text=f"(Current: {current_len} bytes, Max available: {self.max_chars} bytes)",
+                        foreground='gray'
+                    )
             
     def get_text(self) -> str:
         """Get the current text content"""

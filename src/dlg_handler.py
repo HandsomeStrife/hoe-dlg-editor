@@ -137,11 +137,6 @@ class DlgHandler:
         content = ''.join(content_parts)
         
         # Find text sections using a pattern that matches valid text sequences
-        # Match either:
-        # 1. Sequences of Cyrillic text (at least 2 chars)
-        # 2. Sequences of English text (at least 2 chars)
-        # 3. Mixed Cyrillic/English text sections
-        # Exclude sequences with too many special characters or binary data
         text_pattern = r'(?:[А-Яа-яЁё][А-Яа-яЁё\s,.!?-]{1,}[А-Яа-яЁё]|[A-Za-z][A-Za-z\s,.!?-]{1,}[A-Za-z]|[А-Яа-яЁёA-Za-z][А-Яа-яЁёA-Za-z\s,.!?-]{1,}[А-Яа-яЁёA-Za-z])'
         
         # Find all matches
@@ -174,12 +169,39 @@ class DlgHandler:
             if not clean_text:  # Skip if nothing remains after cleaning
                 continue
                 
+            # Calculate available space including trailing nulls
+            available_space = self._calculate_available_space(start_bytes, end_bytes)
+                
             self.text_sections.append(TextSection(
                 text=clean_text,
                 start=start_bytes,
-                end=end_bytes,
+                end=start_bytes + available_space,  # Use the full available space
                 encoding=self.encoding
             ))
+
+    def _calculate_available_space(self, start: int, initial_end: int) -> int:
+        """Calculate available space including trailing null bytes.
+        
+        Args:
+            start: Start position of the text section
+            initial_end: Initial end position of the text section
+            
+        Returns:
+            Total available space including trailing nulls
+        """
+        # Start from the initial end position
+        current_pos = initial_end
+        
+        # Look for consecutive null bytes or spaces
+        while current_pos < len(self._original_binary):
+            byte = self._original_binary[current_pos:current_pos + 1]
+            # Stop if we hit a non-null byte that's not a space
+            if byte != b'\x00' and byte != b' ':
+                break
+            current_pos += 1
+            
+        # Calculate total available space
+        return current_pos - start
 
     def get_editable_text(self) -> str:
         """Get all Cyrillic sections joined with newlines for editing."""
@@ -238,13 +260,13 @@ class DlgHandler:
                 # Only encode the actual text part
                 new_bytes = new_section_text.encode(self.encoding)
                 
-                # Check if the new text fits in the original space
-                if len(new_bytes) > (section.end - section.start):
-                    raise ValueError(f"New text in section {i+1} is too long to fit in original space")
+                # Check if the new text fits in the available space
+                available_space = section.end - section.start
+                if len(new_bytes) > available_space:
+                    raise ValueError(f"New text in section {i+1} is too long to fit in available space (max {available_space} bytes)")
                 
                 # Replace section while preserving exact length
-                section_length = section.end - section.start
-                padded_bytes = new_bytes + b'\x00' * (section_length - len(new_bytes))
+                padded_bytes = new_bytes + b'\x00' * (available_space - len(new_bytes))
                 new_binary[section.start:section.end] = padded_bytes
                 
             except UnicodeEncodeError as e:

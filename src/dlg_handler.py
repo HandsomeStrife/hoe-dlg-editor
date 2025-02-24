@@ -25,6 +25,15 @@ class TextSection:
     end: int   # End position in original binary
     encoding: str  # The encoding used for this section
     trailing_control: str = ""  # Additional metadata for trailing control characters
+    text_byte_positions: List[int] = None  # List of exact byte positions that contained visible text
+
+    def __init__(self, text, start, end, encoding, trailing_control=""):
+        self.text = text
+        self.start = start
+        self.end = end
+        self.encoding = encoding
+        self.trailing_control = trailing_control
+        self.text_byte_positions = []  # Initialize empty list
 
 class DlgHandler:
     # Special control characters from the spec
@@ -472,6 +481,10 @@ class DlgHandler:
             # Keep track of characters for additional validation
             unusual_char_count = 0
             
+            # Track exact positions of visible text bytes
+            text_byte_positions = []
+            current_text = ""
+            
             # Accumulate characters until we hit a null or control character
             while section_end < len(self._original_binary):
                 byte = self._original_binary[section_end]
@@ -483,6 +496,8 @@ class DlgHandler:
                     char = self._safe_decode(bytes([byte]), self.encoding)
                     if char in "ҐЏ°њ†ъЋЌ¬їѓ":
                         unusual_char_count += 1
+                    text_byte_positions.append(section_end)
+                    current_text += char
                 except:
                     pass
                 
@@ -519,6 +534,7 @@ class DlgHandler:
                     # Common pattern in dialogs is text followed by control numbers/characters
                     clean_text = text
                     trailing_control = ""
+                    clean_text_positions = text_byte_positions.copy()
                     
                     # Different types of trailing control character patterns:
                     
@@ -527,6 +543,8 @@ class DlgHandler:
                     if num_match:
                         clean_text = num_match.group(1)
                         trailing_control = num_match.group(2)
+                        # Adjust byte positions to only include the clean text
+                        clean_text_positions = clean_text_positions[:len(clean_text)]
                     
                     # 2. Single non-Russian character after Russian text and punctuation
                     # Like "Что?!б" where 'б' is the control character
@@ -566,12 +584,16 @@ class DlgHandler:
                         if is_suspicious_last_char:
                             clean_text = text[:-1]
                             trailing_control = last_char
+                            # Adjust byte positions to only include the clean text
+                            clean_text_positions = clean_text_positions[:len(clean_text)]
                     
                     # 3. Known control characters at the end
                     for ctrl_char in self._known_control_chars:  # Use our adaptive list
                         if clean_text.endswith(ctrl_char) and ctrl_char not in self._excluded_control_chars:
                             clean_text = clean_text[:-len(ctrl_char)]
                             trailing_control = ctrl_char + trailing_control
+                            # Adjust byte positions to only include the clean text
+                            clean_text_positions = clean_text_positions[:len(clean_text)]
                     
                     # Skip if it's too short or doesn't contain letters
                     # For longer text, require spaces or punctuation
@@ -589,10 +611,12 @@ class DlgHandler:
                             text=clean_text.strip(),
                             start=section_start,
                             end=section_start + available_space,
-                            encoding=self.encoding
+                            encoding=self.encoding,
+                            trailing_control=trailing_control
                         )
-                        # Store the trailing control characters as metadata
-                        section.trailing_control = trailing_control
+                        
+                        # Store the exact byte positions of visible text
+                        section.text_byte_positions = clean_text_positions
                         
                         self.text_sections.append(section)
                 except Exception as e:
@@ -693,58 +717,71 @@ class DlgHandler:
         new_binary = bytearray(self._original_binary)
         
         # Process sections
-        cleaned_sections = new_sections
-        
-        # Replace each section
-        for i, (section, new_section_text) in enumerate(zip(self.text_sections, cleaned_sections)):
+        for i, (section, new_section_text) in enumerate(zip(self.text_sections, new_sections)):
             try:
                 # If the text hasn't changed, skip this section
                 if new_section_text == section.text:
                     continue
                 
-                # Handle encoding safely
-                try:
-                    # First try normal encoding
-                    new_bytes = new_section_text.encode(self.encoding)
-                except UnicodeEncodeError:
-                    # If that fails, try with replacement
-                    print(f"Warning: Section {i+1} contains characters that cannot be encoded in {self.encoding}. Using replacement.")
-                    new_bytes = new_section_text.encode(self.encoding, errors='replace')
+                # Encode the new text using the section's encoding
+                new_text_bytes = new_section_text.encode(section.encoding)
                 
-                # Check available space and handle trailing control characters
-                has_trailing_control = hasattr(section, 'trailing_control') and section.trailing_control
-                
-                if has_trailing_control:
-                    # Calculate how much space we need to preserve for trailing control
-                    trailing_bytes = section.trailing_control.encode(self.encoding)
-                    trailing_length = len(trailing_bytes)
+                # Calculate the maximum number of bytes we can replace
+                # This is based on the original visible text positions
+                if hasattr(section, 'text_byte_positions') and section.text_byte_positions:
+                    original_text_positions = section.text_byte_positions
                     
-                    # Get total available space excluding the trailing control
-                    total_available = section.end - section.start
-                    available_for_text = total_available - trailing_length
+                    # Check if new text fits in the available positions
+                    if len(new_text_bytes) > len(original_text_positions):
+                        print(f"Warning: New text in section {i+1} is too long ({len(new_text_bytes)} bytes) " +
+                              f"to fit in original text positions ({len(original_text_positions)} bytes). Truncating.")
+                        new_text_bytes = new_text_bytes[:len(original_text_positions)]
                     
-                    # If new text is too long to fit with the trailing control
-                    if len(new_bytes) > available_for_text:
-                        print(f"Warning: New text in section {i+1} is too long to fit with trailing control characters. Truncating.")
-                        new_bytes = new_bytes[:available_for_text]
-                    
-                    # Add padding between text and control character
-                    padding_length = available_for_text - len(new_bytes)
-                    new_bytes = new_bytes + b'\x00' * padding_length + trailing_bytes
+                    # Replace bytes at exact positions from the original text
+                    for j, byte_pos in enumerate(original_text_positions):
+                        if j < len(new_text_bytes):
+                            # Replace with new text byte
+                            new_binary[byte_pos] = new_text_bytes[j]
+                        else:
+                            # If new text is shorter, fill with null bytes
+                            new_binary[byte_pos] = 0
                 else:
-                    # No trailing control - handle as before
-                    available_space = section.end - section.start
-                    if len(new_bytes) > available_space:
-                        print(f"Warning: New text in section {i+1} is too long ({len(new_bytes)} bytes) to fit in available space (max {available_space} bytes). Truncating.")
-                        new_bytes = new_bytes[:available_space]
+                    # Fallback for sections without recorded byte positions
+                    print(f"Warning: Section {i+1} doesn't have recorded byte positions. Using standard replacement.")
                     
-                    # Fill the remaining space with null bytes
-                    padding = b'\x00' * (available_space - len(new_bytes))
-                    new_bytes = new_bytes + padding
-                
-                # Replace section while preserving exact length
-                new_binary[section.start:section.end] = new_bytes
-                
+                    # Standard replacement logic as before
+                    available_space = section.end - section.start
+                    
+                    # Check for trailing control characters
+                    has_trailing_control = hasattr(section, 'trailing_control') and section.trailing_control
+                    
+                    if has_trailing_control:
+                        trailing_bytes = section.trailing_control.encode(section.encoding)
+                        trailing_length = len(trailing_bytes)
+                        
+                        # Available space for text = total space - trailing control
+                        available_for_text = available_space - trailing_length
+                        
+                        if len(new_text_bytes) > available_for_text:
+                            print(f"Warning: New text is too long. Truncating.")
+                            new_text_bytes = new_text_bytes[:available_for_text]
+                        
+                        # Construct the new section: text + padding + trailing control
+                        padding_length = available_for_text - len(new_text_bytes)
+                        complete_bytes = new_text_bytes + b'\x00' * padding_length + trailing_bytes
+                    else:
+                        # No trailing control, use full space
+                        if len(new_text_bytes) > available_space:
+                            print(f"Warning: New text is too long. Truncating.")
+                            new_text_bytes = new_text_bytes[:available_space]
+                        
+                        # Construct the new section: text + padding
+                        padding_length = available_space - len(new_text_bytes)
+                        complete_bytes = new_text_bytes + b'\x00' * padding_length
+                    
+                    # Replace the entire section
+                    new_binary[section.start:section.end] = complete_bytes
+            
             except Exception as e:
                 print(f"Warning: Error updating section {i+1}: {e}. Skipping this section.")
                 continue
@@ -1019,3 +1056,103 @@ class DlgHandler:
                 if char not in self._excluded_control_chars and char not in self._known_control_chars:
                     self._known_control_chars.append(char)
                     print(f"Added '{char}' to known control characters") 
+
+    def debug_first_entry(self) -> str:
+        """Analyze the first text entry in detail to identify hidden control characters."""
+        if not self.text_sections or len(self.text_sections) == 0:
+            return "No text sections found. Call read_file() first."
+            
+        # Get the first section
+        first_section = self.text_sections[0]
+        
+        # Extract the binary data for this section
+        section_binary = self._original_binary[first_section.start:first_section.end]
+        
+        # Create a detailed analysis
+        result = []
+        result.append(f"First entry analysis:")
+        result.append(f"Text: '{first_section.text}'")
+        if hasattr(first_section, 'trailing_control') and first_section.trailing_control:
+            result.append(f"Trailing control characters: '{first_section.trailing_control}'")
+        result.append(f"Start position: {first_section.start}")
+        result.append(f"End position: {first_section.end}")
+        result.append(f"Total space: {first_section.end - first_section.start} bytes")
+        result.append(f"Text encoded length: {len(first_section.text.encode(self.encoding))} bytes")
+        
+        # Show byte-by-byte analysis
+        result.append("\nByte-by-byte analysis:")
+        result.append("Position | Hex  | Decimal | Character | Notes")
+        result.append("---------+------+---------+-----------+---------------")
+        
+        for i, byte in enumerate(section_binary):
+            pos = first_section.start + i
+            try:
+                char = bytes([byte]).decode(self.encoding)
+                note = ""
+                
+                # Detect null bytes
+                if byte == 0:
+                    char = "␀"  # Null character symbol
+                    note = "NULL byte"
+                # Detect control characters
+                elif byte < 32:
+                    note = f"Control character (ASCII {byte})"
+                # Detect if this is part of the visible text
+                elif char in first_section.text:
+                    note = "Part of visible text"
+                # Detect if this is a trailing control character
+                elif hasattr(first_section, 'trailing_control') and char in first_section.trailing_control:
+                    note = "Trailing control character"
+                # Otherwise, it's an unknown/hidden character
+                else:
+                    note = "Hidden/unknown character"
+                    
+                result.append(f"{pos:8} | 0x{byte:02x} | {byte:7} | {char:9} | {note}")
+            except UnicodeDecodeError:
+                result.append(f"{pos:8} | 0x{byte:02x} | {byte:7} | {'?':9} | Cannot decode")
+        
+        # Look for patterns before the text
+        prefix_binary = self._original_binary[max(0, first_section.start - 20):first_section.start]
+        if prefix_binary:
+            result.append("\nExamining 20 bytes before the first entry:")
+            for i, byte in enumerate(prefix_binary):
+                pos = max(0, first_section.start - 20) + i
+                try:
+                    char = bytes([byte]).decode(self.encoding, errors='replace')
+                    result.append(f"{pos:8} | 0x{byte:02x} | {byte:7} | {char:9}")
+                except:
+                    result.append(f"{pos:8} | 0x{byte:02x} | {byte:7} | {'?':9}")
+        
+        # Check if there's a header pattern
+        common_headers = [b'\x01\x00\x00\x00', b'\x00\x01\x00\x00', b'\xFF\xFF\xFF\xFF']
+        for header in common_headers:
+            for i in range(max(0, first_section.start - 20), first_section.start):
+                if i + len(header) <= len(self._original_binary):
+                    if self._original_binary[i:i + len(header)] == header:
+                        result.append(f"\nPossible header found at position {i}: {header}")
+        
+        return "\n".join(result) 
+
+    def save_first_entry_binary(self, output_path: str) -> None:
+        """Save the binary data of the first entry to a file for detailed analysis."""
+        if not self.text_sections or len(self.text_sections) == 0:
+            raise ValueError("No text sections found. Call read_file() first.")
+            
+        # Get the first section
+        first_section = self.text_sections[0]
+        
+        # Extract the binary data for this section
+        section_binary = self._original_binary[first_section.start:first_section.end]
+        
+        # Save to file
+        with open(output_path, 'wb') as f:
+            f.write(section_binary)
+            
+        print(f"First entry binary saved to {output_path}")
+        
+        # Create a text file with the analysis
+        text_output_path = output_path + '.txt'
+        with open(text_output_path, 'w', encoding='utf-8') as f:
+            f.write(self.debug_first_entry())
+            
+        print(f"First entry analysis saved to {text_output_path}") 

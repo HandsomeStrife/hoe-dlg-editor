@@ -456,6 +456,12 @@ class DlgGuiEditor:
         menubar.add_cascade(label="Settings", menu=settings_menu)
         settings_menu.add_command(label="Configure OpenAI API Key", command=self._show_api_key_dialog)
         
+        # Debug menu
+        debug_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Debug", menu=debug_menu)
+        debug_menu.add_command(label="Analyze First Entry", command=self._analyze_first_entry)
+        debug_menu.add_command(label="Save First Entry Binary", command=self._save_first_entry_binary)
+        
     def _create_layout(self):
         """Create the main layout."""
         # Main paned window
@@ -835,6 +841,78 @@ class DlgGuiEditor:
         # Refresh file list while maintaining tree state
         self.file_list.refresh_files(maintain_selection=True)
         self.status_var.set(status)
+        
+    def _analyze_first_entry(self):
+        """Analyze the binary structure of the first entry in the current file."""
+        if not self.handler or not self.current_file:
+            messagebox.showinfo("Debug", "No file is currently loaded")
+            return
+            
+        result = self.handler.debug_first_entry()
+        
+        # Create a dialog to display the results
+        dialog = tk.Toplevel(self.root)
+        dialog.title("First Entry Analysis")
+        dialog.geometry("800x600")
+        
+        # Make dialog modal
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Create a frame with padding
+        frame = ttk.Frame(dialog, padding="10")
+        frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Add a scrollable text area
+        text_frame = ttk.Frame(frame)
+        text_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Add scrollbar
+        scrollbar = ttk.Scrollbar(text_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Create text widget with monospaced font
+        text = tk.Text(
+            text_frame,
+            wrap=tk.WORD,
+            font=('Courier', 10),
+            yscrollcommand=scrollbar.set
+        )
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=text.yview)
+        
+        # Insert the analysis result
+        text.insert(tk.END, result)
+        text.config(state=tk.DISABLED)  # Make it read-only
+        
+        # Add a close button
+        ttk.Button(frame, text="Close", command=dialog.destroy).pack(pady=(10, 0))
+        
+    def _save_first_entry_binary(self):
+        """Save the binary data of the first entry to a file for analysis."""
+        if not self.handler or not self.current_file:
+            messagebox.showinfo("Debug", "No file is currently loaded")
+            return
+            
+        # Ask for save location
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".bin",
+            filetypes=[("Binary files", "*.bin"), ("All files", "*.*")],
+            title="Save First Entry Binary"
+        )
+        
+        if not file_path:
+            return  # User cancelled
+            
+        try:
+            self.handler.save_first_entry_binary(file_path)
+            messagebox.showinfo(
+                "Debug", 
+                f"First entry binary saved to {file_path}\n"
+                f"Analysis saved to {file_path}.txt"
+            )
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save binary: {str(e)}")
         
     def run(self):
         """Run the editor application."""

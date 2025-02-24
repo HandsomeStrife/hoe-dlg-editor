@@ -5,16 +5,19 @@ on:
     tags:
       - 'v*'  # Trigger on version tags
 
+permissions:
+  contents: write  # Required for creating releases and uploading assets
+
 jobs:
   build:
     name: Build and Release
     runs-on: windows-latest  # Since this is primarily for Windows users
     
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3  # Updated to v3
     
     - name: Set up Python
-      uses: actions/setup-python@v2
+      uses: actions/setup-python@v4  # Updated to v4
       with:
         python-version: '3.10'
     
@@ -29,22 +32,18 @@ jobs:
         python build.py
     
     - name: Create Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      uses: softprops/action-gh-release@v1  # Using a more reliable release action
       with:
-        tag_name: ${{ github.ref }}
-        release_name: DLG Editor ${{ github.ref }}
+        files: ./dist/DLGEditor-*-win.zip
+        name: DLG Editor ${{ github.ref_name }}
+        body: |
+          DLG Editor Release ${{ github.ref_name }}
+          
+          Features:
+          - Full DLG file editing support
+          - SQLite-based file tracking
+          - OpenAI translation integration
+          - Proper handling of text sections and quotes
+          - Byte-perfect file preservation
         draft: false
-        prerelease: false
-    
-    - name: Upload Release Asset
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./dist/DLGEditor-${{ github.ref_name }}-win.zip
-        asset_name: DLGEditor-${{ github.ref_name }}-win.zip
-        asset_content_type: application/zip 
+        prerelease: false 

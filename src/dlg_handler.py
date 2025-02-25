@@ -26,6 +26,7 @@ class TextSection:
     encoding: str  # The encoding used for this section
     trailing_control: str = ""  # Additional metadata for trailing control characters
     text_byte_positions: List[int] = None  # List of exact byte positions that contained visible text
+    padding_byte_positions: List[int] = None  # List of padding byte positions (null bytes available for text expansion)
 
     def __init__(self, text, start, end, encoding, trailing_control=""):
         self.text = text
@@ -34,6 +35,27 @@ class TextSection:
         self.encoding = encoding
         self.trailing_control = trailing_control
         self.text_byte_positions = []  # Initialize empty list
+        self.padding_byte_positions = []  # Initialize empty list for padding bytes
+
+    def get_max_text_space(self):
+        """Calculate the maximum available space for text, including padding."""
+        if not self.text_byte_positions:
+            # If we don't have byte positions, fall back to text length
+            return len(self.text.encode(self.encoding))
+            
+        # If we have both text and padding byte positions, use the combined space
+        if self.padding_byte_positions:
+            all_positions = sorted(self.text_byte_positions + self.padding_byte_positions)
+            if all_positions:
+                return all_positions[-1] - all_positions[0] + 1
+                
+        # If we only have text positions, use those
+        if self.text_byte_positions:
+            return self.text_byte_positions[-1] - self.text_byte_positions[0] + 1
+            
+        # Fallback to section size minus trailing control
+        trailing_size = len(self.trailing_control.encode(self.encoding)) if self.trailing_control else 0
+        return self.end - self.start - trailing_size
 
 class DlgHandler:
     # Special control characters from the spec
@@ -764,6 +786,43 @@ class DlgHandler:
                         # Store the exact byte positions of visible text
                         section.text_byte_positions = clean_text_positions
                         
+                        # Now add padding bytes - any null bytes between end of visible text and trailing control
+                        # or the next non-null content
+                        last_text_byte = clean_text_positions[-1] if clean_text_positions else section_start
+                        
+                        # Find where trailing control or next content starts
+                        next_content_pos = last_text_byte + 1
+                        trailing_control_start = None
+                        
+                        # If we have trailing control, find its position
+                        if trailing_control:
+                            # Try to find the position where trailing control starts
+                            for pos in range(next_content_pos, section_start + available_space):
+                                if pos < len(self._original_binary):
+                                    # Check if this byte matches the start of trailing control
+                                    try:
+                                        potential_control = self._original_binary[pos:pos+len(trailing_control)].decode(self.encoding)
+                                        if potential_control == trailing_control:
+                                            trailing_control_start = pos
+                                            break
+                                    except:
+                                        pass
+                        
+                        # If we couldn't find trailing control, use the end of the section
+                        if trailing_control_start is None:
+                            trailing_control_start = section.end
+                        
+                        # Identify padding bytes (nulls between end of text and start of trailing control)
+                        padding_bytes = []
+                        for pos in range(next_content_pos, trailing_control_start):
+                            if pos < len(self._original_binary) and self._original_binary[pos] == 0:
+                                padding_bytes.append(pos)
+                        
+                        # Store the padding bytes
+                        if padding_bytes:
+                            section.padding_byte_positions = padding_bytes
+                            print(f"Found {len(padding_bytes)} padding bytes after text, available for expansion")
+                        
                         # Double-check our results - don't allow spaces + quotes at the end
                         if re.search(r'\s+[\'"]$', section.text):
                             print(f"WARNING: Still found problematic pattern in final text: '{section.text}'")
@@ -808,7 +867,25 @@ class DlgHandler:
             current_pos += 1
             
         # Calculate total available space
-        return current_pos - start
+        available_space = current_pos - start
+        
+        # We need to check if there are trailing control characters
+        # that would reduce the actual available space for text
+        section = None
+        for s in self.text_sections:
+            if s.start <= start < s.end:
+                section = s
+                break
+        
+        # If we found the section and it has trailing control, 
+        # subtract the trailing control length from available space
+        if section and hasattr(section, 'trailing_control') and section.trailing_control:
+            trailing_len = len(section.trailing_control.encode(section.encoding))
+            if trailing_len > 0:
+                print(f"  Note: Subtracting {trailing_len} bytes for trailing control characters")
+                available_space -= trailing_len
+        
+        return available_space
 
     def get_editable_text(self) -> str:
         """Get all Cyrillic sections joined with newlines for editing."""
@@ -992,161 +1069,175 @@ class DlgHandler:
             # Get the original text and encoded versions
             original_text = section.text
             original_encoded = original_text.encode(section.encoding)
+            
+            # Calculate the available space for this section
+            section_data = result_binary[section.start:section.end]
+            section_size = len(section_data)
+            
+            # Get trailing control characters
+            trailing_control = getattr(section, 'trailing_control', "")
+            trailing_encoded = trailing_control.encode(section.encoding) if trailing_control else b''
+            trailing_length = len(trailing_encoded)
+            
+            # Calculate the maximum available space for new text
+            # This is the section size minus the space needed for trailing control
+            # BUT we need to be extremely careful to maintain the exact binary structure
+            
+            # Find the exact original bytes used by the text (excluding trailing control)
+            original_text_bytes = original_text.encode(section.encoding)
+            original_text_length = len(original_text_bytes)
+            
+            # Get the original section size
+            section_data = result_binary[section.start:section.end]
+            section_size = len(section_data)
+            
+            # Get trailing control characters
+            trailing_control = getattr(section, 'trailing_control', "")
+            trailing_encoded = trailing_control.encode(section.encoding) if trailing_control else b''
+            trailing_length = len(trailing_encoded)
+            
+            # Encode the new text
             new_encoded = new_section_text.encode(section.encoding)
             
-            # Do byte-by-byte differential changes only
-            # 1. Find the original text exactly in the binary data
-            # 2. Modify only the minimum necessary bytes
-            
-            # Get section from the file binary
-            section_data = result_binary[section.start:section.end]
+            # If we have byte position information, use that to precisely locate the text
+            if section.text_byte_positions and len(section.text_byte_positions) > 0:
+                # Get the exact range of bytes used by the original text
+                first_text_byte = section.text_byte_positions[0] - section.start
+                last_text_byte = section.text_byte_positions[-1] - section.start + 1
                 
-            print(f"  Section boundaries: {section.start}-{section.end} ({len(section_data)} bytes)")
-            print(f"  Original text length: {len(original_text)} chars, {len(original_encoded)} bytes")
-            print(f"  New text length: {len(new_section_text)} chars, {len(new_encoded)} bytes")
+                # The max space available for text is exactly where the original text was
+                # We cannot overwrite control characters or structural null bytes
+                max_text_space = last_text_byte - first_text_byte
+                text_start_offset = first_text_byte
+                
+                # If we also have padding bytes, consider those for additional space
+                if hasattr(section, 'padding_byte_positions') and section.padding_byte_positions:
+                    # Combine text and padding positions
+                    all_positions = sorted(section.text_byte_positions + section.padding_byte_positions)
+                    if all_positions:
+                        first_byte = all_positions[0] - section.start
+                        last_byte = all_positions[-1] - section.start + 1
+                        max_text_space = last_byte - first_byte
+                        text_start_offset = first_byte
+                        print(f"  Using text + padding bytes for max space: {max_text_space} bytes")
+                else:
+                    print(f"  Using precise byte positions: text bytes {first_text_byte}-{last_text_byte}")
+                
+                # If the original text bytes is larger than what the byte positions indicate, 
+                # we might have an issue with our byte position tracking
+                if original_text_length > max_text_space:
+                    print(f"  WARNING: Original text ({original_text_length} bytes) is larger than byte positions space ({max_text_space} bytes)")
+                    print(f"  Expanding max space to fit original text")
+                    max_text_space = original_text_length
+            else:
+                # Without precise byte positions, we need to be more conservative
+                # We'll search for the original text in the section data
+                
+                # Search for the original text in the binary
+                text_start_offset = 0
+                found = False
+                for j in range(section_size - original_text_length + 1):
+                    match = True
+                    for k in range(original_text_length):
+                        if j + k >= section_size or section_data[j + k] != original_text_bytes[k]:
+                            match = False
+                            break
+                    if match:
+                        text_start_offset = j
+                        found = True
+                        break
+                
+                # If we found the text, use its length as max space
+                if found:
+                    # We ONLY replace the exact bytes used by the original text
+                    max_text_space = original_text_length
+                    print(f"  Located original text at offset {text_start_offset}, length {max_text_space}")
+                else:
+                    # Fallback: use the range from start to where trailing control begins (if found)
+                    print(f"  WARNING: Could not locate original text in binary data")
+                    # Try to find where trailing control starts
+                    trailing_start = section_size
+                    if trailing_encoded:
+                        for j in range(section_size - len(trailing_encoded), -1, -1):
+                            match = True
+                            for k in range(len(trailing_encoded)):
+                                if j + k >= section_size or section_data[j + k] != trailing_encoded[k]:
+                                    match = False
+                                    break
+                            if match:
+                                trailing_start = j
+                                break
+                    
+                    # As a safer approach, use at least the original text length
+                    max_text_space = max(original_text_length, trailing_start - text_start_offset)
+                    print(f"  Fallback: Using at least original text length {original_text_length} bytes for space")
             
-            # See if any problematic bytes are in this section
+            # Make sure new text doesn't exceed available space (accounting for trailing controls)
+            if len(new_encoded) > max_text_space:
+                print(f"  WARNING: New text ({len(new_encoded)} bytes) exceeds available space ({max_text_space} bytes).")
+                print(f"  Text will be truncated to fit.")
+                # Truncate the new text to fit available space
+                new_encoded = new_encoded[:max_text_space]
+                # If possible, try to truncate at a character boundary to avoid partial characters
+                try:
+                    # Try to decode the truncated bytes to check for valid ending
+                    truncated_text = new_encoded.decode(section.encoding)
+                    # Set our new section text to the truncated version
+                    new_section_text = truncated_text
+                    print(f"  Truncated to: '{truncated_text}'")
+                except UnicodeDecodeError:
+                    # If decode fails, truncate further until we get a valid character boundary
+                    while len(new_encoded) > 0:
+                        new_encoded = new_encoded[:-1]
+                        try:
+                            truncated_text = new_encoded.decode(section.encoding)
+                            new_section_text = truncated_text
+                            print(f"  Truncated to character boundary: '{truncated_text}'")
+                            break
+                        except UnicodeDecodeError:
+                            continue
+            
+            print(f"  Section boundaries: {section.start}-{section.end} ({section_size} bytes)")
+            print(f"  Original text length: {len(original_text)} chars, {len(original_text_bytes)} bytes")
+            print(f"  New text length: {len(new_section_text)} chars, {len(new_encoded)} bytes")
+            print(f"  Available space for text: {max_text_space} bytes")
+            print(f"  Trailing control length: {trailing_length} bytes")
+            
+            # Identify protected bytes in this section
             section_protected_positions = [pos for pos in protected_positions 
-                                        if section.start <= pos < section.end]
+                                          if section.start <= pos < section.end]
             
             if section_protected_positions:
                 print(f"  This section contains {len(section_protected_positions)} protected bytes at: {section_protected_positions}")
             
-            # Search for the exact original text in the section
-            original_found = False
+            # Replace the text in the binary data
+            # Only modify the exact bytes that contained the original text
+            for j in range(max_text_space):
+                pos = section.start + text_start_offset + j
+                if pos not in protected_positions and pos < section.end:
+                    old_byte = result_binary[pos]
+                    # Write new text byte if available, otherwise write null
+                    new_byte = new_encoded[j] if j < len(new_encoded) else 0
+                    result_binary[pos] = new_byte
+                    if old_byte != new_byte:
+                        changes_made.append((pos, old_byte, new_byte))
             
-            # 1. First try to use recorded byte positions
-            if hasattr(section, 'text_byte_positions') and section.text_byte_positions:
-                text_positions = [pos for pos in section.text_byte_positions 
-                                if pos >= section.start and pos < section.end]
-                
-                if text_positions:
-                    print(f"  Found {len(text_positions)} recorded text byte positions")
-                    original_found = True
-                    
-                    # Create a byte map to show which positions contain visible text
-                    # and are safe to modify (not protected)
-                    text_position_map = [False] * (section.end - section.start)
-                    for pos in text_positions:
-                        rel_pos = pos - section.start
-                        if 0 <= rel_pos < len(text_position_map) and pos not in protected_positions:
-                            text_position_map[rel_pos] = True
-                    
-                    # Replace only the bytes at text positions that are not protected
-                    replaced_count = 0
-                    protected_count = 0
-                    for rel_pos, is_text in enumerate(text_position_map):
-                        abs_pos = section.start + rel_pos
-                        
-                        # Skip protected positions
-                        if abs_pos in protected_positions:
-                            protected_count += 1
-                            continue
-                            
-                        if is_text:
-                            if replaced_count < len(new_encoded):
-                                # Replace with new text byte
-                                old_byte = result_binary[abs_pos]
-                                new_byte = new_encoded[replaced_count]
-                                result_binary[abs_pos] = new_byte
-                                
-                                if old_byte != new_byte:
-                                    changes_made.append((abs_pos, old_byte, new_byte))
-                                    
-                                replaced_count += 1
-                            else:
-                                # Fill with null bytes if we run out of new text
-                                old_byte = result_binary[abs_pos]
-                                result_binary[abs_pos] = 0
-                                
-                                if old_byte != 0:
-                                    changes_made.append((abs_pos, old_byte, 0))
-                    
-                    print(f"  Replaced {replaced_count} bytes of visible text")
-                    print(f"  Preserved {protected_count} protected byte positions")
-                    if replaced_count < len(new_encoded):
-                        print(f"  WARNING: Only replaced {replaced_count} bytes out of {len(new_encoded)} in new text")
-                    if replaced_count > len(new_encoded):
-                        print(f"  Filled {replaced_count - len(new_encoded)} remaining positions with NULL bytes")
+            # Do NOT modify the position of trailing control characters
+            # They should remain exactly where they were in the original file
             
-            # 2. If recorded positions not available, search for the text directly
-            if not original_found:
-                # Search for original text within section data
-                if len(original_encoded) > 0:
-                    # Try to find the full text
-                    search_text = original_encoded
-                    
-                    for offset in range(len(section_data) - len(search_text) + 1):
-                        if section_data[offset:offset+len(search_text)] == search_text:
-                            print(f"  Found exact text at offset {offset} within section")
-                            original_found = True
-                            
-                            # Replace the text at this position (careful with lengths)
-                            pos = section.start + offset
-                            replacement_length = min(len(search_text), len(new_encoded))
-                            
-                            # Replace bytes one by one, skipping protected positions
-                            replaced_count = 0
-                            protected_count = 0
-                            
-                            for j in range(replacement_length):
-                                current_pos = pos + j
-                                
-                                # Skip protected positions
-                                if current_pos in protected_positions:
-                                    protected_count += 1
-                                    continue
-                                
-                                old_byte = result_binary[current_pos]
-                                new_byte = new_encoded[replaced_count]
-                                result_binary[current_pos] = new_byte
-                                
-                                if old_byte != new_byte:
-                                    changes_made.append((current_pos, old_byte, new_byte))
-                                
-                                replaced_count += 1
-                                if replaced_count >= len(new_encoded):
-                                    break
-                            
-                            # If new text is shorter, fill with null bytes
-                            remaining_positions = 0
-                            if len(new_encoded) < len(search_text):
-                                for j in range(replaced_count + protected_count, len(search_text)):
-                                    current_pos = pos + j
-                                    
-                                    # Skip protected positions
-                                    if current_pos in protected_positions:
-                                        continue
-                                    
-                                    old_byte = result_binary[current_pos]
-                                    result_binary[current_pos] = 0
-                                    if old_byte != 0:
-                                        changes_made.append((current_pos, old_byte, 0))
-                                    remaining_positions += 1
-                                        
-                            print(f"  Replaced {replaced_count} bytes of text")
-                            print(f"  Preserved {protected_count} protected byte positions")
-                            if remaining_positions > 0:
-                                print(f"  Filled {remaining_positions} remaining positions with NULL bytes")
-                                
-                            break
-            
-            # Skip the word-by-word search for simplicity - it's better to leave sections untouched
-            # if we can't find the exact text positions
-            
-            # If we still can't find the text, show a warning
-            if not original_found:
-                print("  WARNING: Could not locate original text in binary data!")
-                print("  This section will not be modified to avoid corrupting the file.")
-                print("  Try with a different version of the file or manually check the binary structure.")
+            print(f"  Replaced {min(max_text_space, len(new_encoded))} bytes of text")
+            print(f"  Left {max(0, max_text_space - len(new_encoded))} null bytes as padding")
+            print(f"  Preserved trailing control characters at their original positions")
+            if section_protected_positions:
+                print(f"  Preserved {len(section_protected_positions)} protected byte positions")
         
         # Log all changes
         if changes_made:
             print("\nSummary of changes made:")
             for pos, old, new in changes_made[:10]:  # Show first 10 changes
                 try:
-                    old_char = bytes([old]).decode(section.encoding, errors='replace')
-                    new_char = bytes([new]).decode(section.encoding, errors='replace') if new != 0 else "␀"
+                    old_char = bytes([old]).decode('cp1251', errors='replace')
+                    new_char = bytes([new]).decode('cp1251', errors='replace') if new != 0 else "␀"
                 except:
                     old_char = "?"
                     new_char = "?"

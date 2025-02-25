@@ -119,7 +119,55 @@ class SectionEditor(ttk.Frame):
         self.is_selected = tk.BooleanVar(value=False)
         
         # Calculate max available characters based on total available space
-        self.max_chars = section.end - section.start  # This now includes trailing null bytes
+        
+        # Get current text length in bytes
+        current_text_bytes = len(section.text.encode(section.encoding))
+        
+        # Account for trailing control characters
+        trailing_control_size = 0
+        if hasattr(section, 'trailing_control') and section.trailing_control:
+            trailing_control_size = len(section.trailing_control.encode(section.encoding))
+        
+        # Use the get_max_text_space method to determine available space
+        # This will include both current text and padding bytes
+        if hasattr(section, 'get_max_text_space'):
+            self.max_chars = section.get_max_text_space()
+            print(f"Section {index + 1}: Using max_text_space method, got {self.max_chars} bytes")
+        else:
+            # Fallback to previous approach
+            section_size = section.end - section.start
+            
+            # If we have byte position information, use that for more accurate calculation
+            if hasattr(section, 'text_byte_positions') and section.text_byte_positions and len(section.text_byte_positions) > 0:
+                # Check if we also have padding bytes
+                if hasattr(section, 'padding_byte_positions') and section.padding_byte_positions:
+                    # Combine text and padding positions to get total available space
+                    all_positions = sorted(section.text_byte_positions + section.padding_byte_positions)
+                    byte_positions_space = all_positions[-1] - all_positions[0] + 1
+                    print(f"Section {index + 1}: Using text+padding byte positions, {len(section.text_byte_positions)} text bytes + {len(section.padding_byte_positions)} padding = {byte_positions_space} bytes")
+                    self.max_chars = byte_positions_space
+                else:
+                    # Use text positions only
+                    first_pos = section.text_byte_positions[0] - section.start
+                    last_pos = section.text_byte_positions[-1] - section.start + 1
+                    byte_positions_space = last_pos - first_pos
+                    self.max_chars = byte_positions_space
+                    print(f"Section {index + 1}: Using text byte positions {first_pos}-{last_pos} for max space")
+            else:
+                # Without precise positions, ensure we have at least enough space for current text
+                self.max_chars = current_text_bytes
+                print(f"Section {index + 1}: Using current text length {current_text_bytes} bytes for max space")
+        
+        # Account for trailing control characters that need to be preserved
+        if trailing_control_size > 0:
+            print(f"Section {index + 1}: Section includes {trailing_control_size} bytes for trailing control '{section.trailing_control}'")
+        
+        # Extra safety check - if our calculation gives less space than what's already being used,
+        # there's a problem with our logic - default to the section size
+        if self.max_chars < current_text_bytes:
+            print(f"Section {index + 1}: WARNING - Calculated max chars ({self.max_chars}) is less than current text size ({current_text_bytes})!")
+            print(f"Section {index + 1}: Falling back to section size minus trailing control")
+            self.max_chars = section.end - section.start - trailing_control_size
         
         # Create frame with border
         self.configure(relief='solid', borderwidth=1, padding=5)

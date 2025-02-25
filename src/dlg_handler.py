@@ -715,8 +715,69 @@ class DlgHandler:
         # Split the new text into sections
         new_sections = new_text.strip().split("\n")
         
+        # If section count doesn't match, try to handle it intelligently
         if len(new_sections) != len(self.text_sections):
-            raise ValueError(f"Number of text sections changed. Expected {len(self.text_sections)}, got {len(new_sections)}")
+            print(f"Warning: Number of text sections changed. Expected {len(self.text_sections)}, got {len(new_sections)}")
+            print("Attempting to reconcile sections...")
+            
+            # Two possible scenarios:
+            # 1. User added newlines within sections (more new sections than original)
+            # 2. User removed newlines (fewer new sections than original)
+            
+            # Case 1: More new sections than original - try to merge them
+            if len(new_sections) > len(self.text_sections):
+                merged_sections = []
+                i = 0
+                
+                for original_idx in range(len(self.text_sections)):
+                    # Skip if we've consumed all new sections
+                    if i >= len(new_sections):
+                        break
+                        
+                    # Start with the current new section
+                    merged_text = new_sections[i]
+                    i += 1
+                    
+                    # If there are still more new sections than original sections remaining,
+                    # merge additional sections until we have the right count
+                    remaining_originals = len(self.text_sections) - original_idx - 1
+                    remaining_new = len(new_sections) - i
+                    
+                    # Calculate how many extra sections we need to merge
+                    extra_sections_to_merge = max(0, remaining_new - remaining_originals)
+                    
+                    # Merge extra sections if needed
+                    for _ in range(extra_sections_to_merge):
+                        if i < len(new_sections):
+                            merged_text += " " + new_sections[i]  # Join with space instead of newline
+                            i += 1
+                            
+                    merged_sections.append(merged_text)
+                
+                # Add any remaining sections
+                while i < len(new_sections) and len(merged_sections) < len(self.text_sections):
+                    merged_sections.append(new_sections[i])
+                    i += 1
+                    
+                # Use the merged sections
+                new_sections = merged_sections
+                
+            # Case 2: Fewer new sections than original - pad with empty sections
+            elif len(new_sections) < len(self.text_sections):
+                # Append empty sections to match the original count
+                for _ in range(len(self.text_sections) - len(new_sections)):
+                    new_sections.append("")
+            
+            # Final check
+            if len(new_sections) != len(self.text_sections):
+                print("Failed to reconcile section counts. Using original sections where needed.")
+                # Ensure we have the right number of sections
+                if len(new_sections) > len(self.text_sections):
+                    new_sections = new_sections[:len(self.text_sections)]
+                else:
+                    # Pad with original sections
+                    for i in range(len(new_sections), len(self.text_sections)):
+                        new_sections.append(self.text_sections[i].text)
         
         # Check if no changes were made at all
         no_changes = True

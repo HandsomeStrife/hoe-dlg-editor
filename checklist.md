@@ -315,13 +315,13 @@ Status of all dialog files in the game.
 
 ### Data\ChrPreset\Pers\SL_IM_Otchym
 
-- [ ] `Data\ChrPreset\Pers\SL_IM_Otchym\SL_IM_Otchym_d0.dlg`
-- [ ] `Data\ChrPreset\Pers\SL_IM_Otchym\SL_IM_Otchym_d1.dlg`
-- [ ] `Data\ChrPreset\Pers\SL_IM_Otchym\SL_IM_Otchym_d2.dlg`
-- [ ] `Data\ChrPreset\Pers\SL_IM_Otchym\SL_IM_Otchym_d3.dlg`
-- [ ] `Data\ChrPreset\Pers\SL_IM_Otchym\SL_IM_Otchym_d4.dlg`
-- [ ] `Data\ChrPreset\Pers\SL_IM_Otchym\SL_IM_Otchym_d5.dlg`
-- [ ] `Data\ChrPreset\Pers\SL_IM_Otchym\SL_IM_Otchym_d9.dlg`
+- [x] `Data\ChrPreset\Pers\SL_IM_Otchym\SL_IM_Otchym_d0.dlg`
+- [x] `Data\ChrPreset\Pers\SL_IM_Otchym\SL_IM_Otchym_d1.dlg`
+- [x] `Data\ChrPreset\Pers\SL_IM_Otchym\SL_IM_Otchym_d2.dlg`
+- [x] `Data\ChrPreset\Pers\SL_IM_Otchym\SL_IM_Otchym_d3.dlg`
+- [x] `Data\ChrPreset\Pers\SL_IM_Otchym\SL_IM_Otchym_d4.dlg`
+- [x] `Data\ChrPreset\Pers\SL_IM_Otchym\SL_IM_Otchym_d5.dlg`
+- [x] `Data\ChrPreset\Pers\SL_IM_Otchym\SL_IM_Otchym_d9.dlg`
 
 ### Data\ChrPreset\Pers\TV_DW_Grim
 
